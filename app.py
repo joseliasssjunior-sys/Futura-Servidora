@@ -4,15 +4,48 @@ import altair as alt
 from datetime import datetime, date
 import time
 import os
-import random
 import json
 import google.generativeai as genai
-from pypdf import PdfReader
 
-# --- 1. CONFIGURAÇÃO ---
+# --- 1. CONFIGURAÇÃO DA PÁGINA (WIDE + ÍCONE) ---
 st.set_page_config(page_title="Futura Servidora", page_icon="⚖️", layout="wide")
 
-# --- 2. CONEXÃO IA ---
+# --- CSS PERSONALIZADO (A MÁGICA DO VISUAL) ---
+st.markdown("""
+<style>
+    /* Esconde o menu padrão e rodapé para parecer app nativo */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    
+    /* Estilo dos Cards de Métricas */
+    .metric-card {
+        background-color: #ffffff;
+        border: 1px solid #e0e0e0;
+        border-radius: 10px;
+        padding: 15px;
+        box-shadow: 2px 2px 10px rgba(0,0,0,0.05);
+        text-align: center;
+    }
+    
+    /* Título Mobile Friendly */
+    h1 {
+        text-align: center;
+        color: #8E44AD;
+        font-family: 'Helvetica', sans-serif;
+        font-size: 2.5rem !important; 
+    }
+    
+    /* Ajuste de botões */
+    .stButton>button {
+        width: 100%;
+        border-radius: 20px;
+        height: 50px;
+        font-weight: bold;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# --- 2. CONEXÃO COM A IA ---
 try:
     api_key = st.secrets["GEMINI_API_KEY"]
     genai.configure(api_key=api_key)
@@ -21,32 +54,24 @@ try:
 except:
     IA_DISPONIVEL = False
 
-# ARQUIVOS DE DADOS
+# ARQUIVOS
 ARQUIVO_ESTUDOS = "historico_estudos.csv"
 ARQUIVO_CONFIG = "config_concurso.json"
 
-# --- 3. FUNÇÕES DE DADOS ---
+# --- 3. FUNÇÕES (MANTIDAS, MAS SIMPLIFICADAS) ---
 def carregar_config():
     if os.path.exists(ARQUIVO_CONFIG):
-        with open(ARQUIVO_CONFIG, "r") as f:
-            return json.load(f)
-    return {
-        "materias": ["Português", "Direito Constitucional", "Direito Administrativo"], 
-        "data_prova": str(date.today()),
-        "banca": "FGV", # Padrão
-        "cargo": "Analista Judiciário"
-    }
+        with open(ARQUIVO_CONFIG, "r") as f: return json.load(f)
+    # Configuração padrão inicial
+    return {"materias": ["Português", "Direito Constitucional"], "data_prova": str(date.today()), "banca": "Definir Banca", "cargo": "Meu Cargo"}
 
 def salvar_config(materias, data_prova, banca, cargo):
-    dados = {"materias": materias, "data_prova": str(data_prova), "banca": banca, "cargo": cargo}
     with open(ARQUIVO_CONFIG, "w") as f:
-        json.dump(dados, f)
+        json.dump({"materias": materias, "data_prova": str(data_prova), "banca": banca, "cargo": cargo}, f)
 
 def carregar_estudos():
     if not os.path.exists(ARQUIVO_ESTUDOS):
-        df = pd.DataFrame(columns=["Data", "Materia", "Minutos", "Qtd_Questões", "Acertos"])
-        df.to_csv(ARQUIVO_ESTUDOS, index=False)
-        return df
+        return pd.DataFrame(columns=["Data", "Materia", "Minutos", "Qtd_Questões", "Acertos"])
     return pd.read_csv(ARQUIVO_ESTUDOS)
 
 def salvar_sessao(materia, minutos, questoes, acertos):
@@ -58,252 +83,173 @@ def salvar_sessao(materia, minutos, questoes, acertos):
         "Qtd_Questões": int(questoes),
         "Acertos": int(acertos)
     }])
-    df = pd.concat([df, novo], ignore_index=True)
-    df.to_csv(ARQUIVO_ESTUDOS, index=False)
+    pd.concat([df, novo], ignore_index=True).to_csv(ARQUIVO_ESTUDOS, index=False)
 
-# --- 4. FUNÇÕES DE IA ESTRATÉGICA ---
+# --- 4. INTERFACE NOVA ---
 
-def gerar_analise_estrategica(banca, cargo, materia):
-    if not IA_DISPONIVEL: return "IA não conectada."
-    
-    prompt = f"""
-    Atue como um Mentora de Concursos de Alto Nível especializada na banca {banca}.
-    O aluno está estudando para o cargo de {cargo}.
-    
-    Faça uma análise estratégica da matéria: {materia}.
-    
-    Eu quero que você me entregue:
-    1. **O Estilo da Banca:** Como a {banca} cobra essa matéria? (Ex: cobra muita lei seca? Doutrina? Jurisprudência? Textos longos?).
-    2. **Top 3 Assuntos Quentes:** Quais são os 3 tópicos que SEMPRE caem para esse cargo?
-    3. **A Pegadinha:** Qual é a armadilha comum dessa banca nessa matéria?
-    4. **Dica de Ouro:** Uma estratégia prática para gabaritar.
-    
-    Use formatação bonita (Negrito, Tópicos, Emojis). Seja direta e técnica.
-    """
-    try:
-        resp = modelo.generate_content(prompt)
-        return resp.text
-    except: return "Erro ao gerar estratégia."
-
-def analisar_edital_completo(arquivo):
-    if not IA_DISPONIVEL: return None
-    leitor = PdfReader(arquivo)
-    texto = ""
-    for pag in leitor.pages[:20]: texto += pag.extract_text()
-    
-    prompt = f"""
-    Analise o texto deste Edital. Extraia em JSON:
-    1. "banca": Nome da banca.
-    2. "cargo": Cargo principal.
-    3. "materias": Lista de disciplinas.
-    Responda APENAS JSON. Texto: {texto[:40000]}
-    """
-    try:
-        resp = modelo.generate_content(prompt)
-        return json.loads(resp.text.replace("```json", "").replace("```", ""))
-    except: return None
-
-def gerar_simulado(banca, cargo, materia, qtd):
-    if not IA_DISPONIVEL: return []
-    prompt = f"""
-    Crie um simulado de {qtd} questões de múltipla escolha sobre {materia}, estilo banca {banca}, cargo {cargo}.
-    Nível difícil.
-    Retorne JSON: [{{ "pergunta": "...", "opcoes": ["A)...", "B)..."], "correta": "A", "comentario": "..." }}]
-    """
-    try:
-        resp = modelo.generate_content(prompt)
-        return json.loads(resp.text.replace("```json", "").replace("```", ""))
-    except: return []
-
-# --- 5. INTERFACE ---
-
-# Variáveis de Estado
-if 'cronometro' not in st.session_state: st.session_state.cronometro = {'ativo': False, 'inicio': None, 'acumulado': 0, 'materia': None}
-if 'estrategia_cache' not in st.session_state: st.session_state.estrategia_cache = {}
-
+if 'cronometro' not in st.session_state: st.session_state.cronometro = {'ativo': False, 'inicio': None, 'acumulado': 0}
 config = carregar_config()
 
-# HEADER
-st.title(f"👩‍⚖️ Painel da Aprovação | {config.get('cargo', 'Concurseira')}")
-c1, c2 = st.columns([3, 1])
-with c1:
-    st.markdown(f"**Foco Total na Banca:** <span style='color:#E74C3C; font-size:20px; font-weight:bold;'>{config.get('banca', 'Não definida')}</span>", unsafe_allow_html=True)
-with c2:
-    try:
-        dias = (datetime.strptime(config['data_prova'], "%Y-%m-%d").date() - date.today()).days
-        if dias >= 0: st.metric("Dias para a Prova", dias)
-        else: st.error("A prova já passou!")
-    except: st.warning("Configure a data")
+# --- CABEÇALHO LIMPO E CENTRALIZADO ---
+st.markdown(f"<h1>⚖️ Painel da Aprovação</h1>", unsafe_allow_html=True)
+st.markdown(f"<h3 style='text-align: center; color: gray; margin-top: -20px;'>{config['cargo']} | {config['banca']}</h3>", unsafe_allow_html=True)
 
-# ABAS
-tab_dash, tab_strat, tab_foco, tab_sim, tab_config = st.tabs([
-    "📊 Dashboard Geral",
-    "🎯 Pontos Estratégicos", 
-    "⏱️ Modo Foco", 
-    "📝 Simulador IA", 
-    "⚙️ Ajustes"
-])
+# Cálculo de Dias (Correção do BUG do Zero)
+try:
+    data_prova = datetime.strptime(config['data_prova'], "%Y-%m-%d").date()
+    hoje = date.today()
+    dias = (data_prova - hoje).days
+    
+    if dias < 0: msg_dias = "🏁 A prova já passou!"
+    elif dias == 0: msg_dias = "🔥 É HOJE! BOA SORTE!"
+    else: msg_dias = f"📅 Faltam **{dias}** dias"
+except:
+    msg_dias = "⚙️ Configure a data"
 
-# --- ABA 1: DASHBOARD (VISÃO GERAL) ---
-with tab_dash:
+st.info(msg_dias, icon="⏳")
+
+# --- ABAS COM ÍCONES ---
+# Usamos nomes curtos para caber no celular
+tab1, tab2, tab3, tab4 = st.tabs(["📊 Painel", "⏱️ Foco", "📝 Simulado", "⚙️ Config"])
+
+# --- ABA 1: DASHBOARD VISUAL ---
+with tab1:
     df = carregar_estudos()
-    
     if df.empty:
-        st.info("Comece a estudar para ver seus dados aqui!")
+        st.warning("Comece a estudar para ver seus gráficos aqui!")
     else:
-        # Métricas de Topo
-        col_kpi1, col_kpi2, col_kpi3, col_kpi4 = st.columns(4)
+        # Métricas em Cards (Melhor para mobile)
+        total_h = df["Minutos"].sum() / 60
+        questoes = df["Qtd_Questões"].sum()
         
-        total_horas = df["Minutos"].sum() / 60
-        questoes_totais = df["Qtd_Questões"].sum()
-        acertos_totais = df["Acertos"].sum()
-        media_geral = (acertos_totais / questoes_totais * 100) if questoes_totais > 0 else 0
+        # Layout de colunas para métricas
+        col_m1, col_m2 = st.columns(2)
+        col_m1.markdown(f"<div class='metric-card'><h3>{total_h:.1f}h</h3><p>Horas Líquidas</p></div>", unsafe_allow_html=True)
+        col_m2.markdown(f"<div class='metric-card'><h3>{questoes}</h3><p>Questões Feitas</p></div>", unsafe_allow_html=True)
         
-        col_kpi1.metric("Horas Líquidas", f"{total_horas:.1f}h")
-        col_kpi2.metric("Questões Feitas", questoes_totais)
-        col_kpi3.metric("Acertos", acertos_totais)
-        col_kpi4.metric("Taxa de Acerto", f"{media_geral:.1f}%", delta_color="normal")
+        st.write("") # Espaço
         
-        st.divider()
-        
-        # Gráficos Lado a Lado
-        g1, g2 = st.columns(2)
-        
-        with g1:
-            st.markdown("### 🕒 Onde você gasta seu tempo?")
-            chart_pizza = alt.Chart(df).mark_arc(innerRadius=60).encode(
-                theta="sum(Minutos)",
-                color=alt.Color("Materia", legend=alt.Legend(title="Disciplinas")),
-                tooltip=["Materia", "sum(Minutos)"]
-            ).properties(height=350)
-            st.altair_chart(chart_pizza, use_container_width=True)
-            
-        with g2:
-            st.markdown("### 🧠 Qualidade do Estudo (Acertos)")
-            # Calcula % por matéria
-            df_group = df.groupby("Materia")[["Qtd_Questões", "Acertos"]].sum().reset_index()
-            df_group["Taxa"] = (df_group["Acertos"] / df_group["Qtd_Questões"] * 100).fillna(0)
-            
-            chart_bar = alt.Chart(df_group).mark_bar().encode(
-                x=alt.X("Taxa", title="% de Acertos", scale=alt.Scale(domain=[0, 100])),
-                y=alt.Y("Materia", sort="-x"),
-                color=alt.condition(
-                    alt.datum.Taxa > 80,
-                    alt.value("#2ECC71"),  # Verde (Excelente)
-                    alt.value("#E74C3C")   # Vermelho (Atenção)
-                ),
-                tooltip=["Materia", "Taxa", "Qtd_Questões"]
-            ).properties(height=350)
-            st.altair_chart(chart_bar, use_container_width=True)
+        # Gráfico Simplificado
+        st.caption("Evolução de Questões")
+        chart = alt.Chart(df).mark_bar().encode(
+            x='Data', y='Qtd_Questões', color='Materia'
+        ).properties(height=250) # Altura menor para celular
+        st.altair_chart(chart, use_container_width=True)
 
-# --- ABA 2: PONTOS ESTRATÉGICOS (A NOVA FUNÇÃO) ---
-with tab_strat:
-    st.header(f"🕵️‍♂️ Raio-X da {config.get('banca', 'Banca')}")
-    st.markdown("Descubra o que a IA analisou sobre o perfil da banca para o seu cargo.")
+# --- ABA 2: CRONÔMETRO GIGANTE ---
+with tab2:
+    st.markdown("### 🍅 Modo Pomodoro")
+    materia_foco = st.selectbox("Vou estudar:", config['materias'])
     
-    col_sel, col_btn = st.columns([3, 1])
-    materia_analise = col_sel.selectbox("Qual matéria você quer hackear?", config['materias'])
+    state = st.session_state.cronometro
     
-    # Botão para gerar (ou buscar do cache para não gastar IA a toa)
-    if col_btn.button("🔍 Gerar Estratégia"):
-        with st.spinner(f"Analisando provas anteriores da {config.get('banca')}..."):
-            analise = gerar_analise_estrategica(config.get('banca', 'Genérica'), config.get('cargo', 'Geral'), materia_analise)
-            st.session_state.estrategia_cache[materia_analise] = analise
-    
-    # Mostra o resultado
-    if materia_analise in st.session_state.estrategia_cache:
-        st.markdown("---")
-        st.markdown(st.session_state.estrategia_cache[materia_analise])
-        st.info("💡 Dica: Salve essas informações no seu caderno de resumo!")
+    # Lógica do tempo
+    if state['ativo']:
+        decorrido = time.time() - state['inicio']
+        tempo_total = state['acumulado'] + decorrido
+        time.sleep(1) # Atualiza a cada segundo
+        st.rerun()
     else:
-        st.info("Selecione uma matéria e clique em Gerar para ver a inteligência.")
-
-# --- ABA 3: MODO FOCO ---
-with tab_foco:
-    st.markdown("### Cronômetro de Estudos")
-    c1, c2 = st.columns([1, 2])
-    with c1:
-        m_foco = st.selectbox("Matéria", config['materias'], key="foco_mat")
-    with c2:
-        state = st.session_state.cronometro
-        tempo = state['acumulado'] + (time.time() - state['inicio'] if state['ativo'] else 0)
-        if state['ativo']: time.sleep(1); st.rerun()
+        tempo_total = state['acumulado']
         
-        m, s = divmod(int(tempo), 60)
-        h, m = divmod(m, 60)
-        st.markdown(f"<div style='font-size:50px; font-weight:bold; color:#2980B9;'>{h:02d}:{m:02d}:{s:02d}</div>", unsafe_allow_html=True)
-
-    b1, b2, b3 = st.columns(3)
-    if b1.button("▶️ INICIAR"): state['ativo']=True; state['inicio']=time.time(); st.rerun()
-    if b2.button("⏸️ PAUSAR"): state['ativo']=False; state['acumulado']+=time.time()-state['inicio']; st.rerun()
-    if b3.button("⏹️ SALVAR"):
-        minutos = state['acumulado']/60
+    # Formata o relógio
+    m, s = divmod(int(tempo_total), 60)
+    h, m = divmod(m, 60)
+    
+    # RELÓGIO GIGANTE CENTRALIZADO
+    st.markdown(f"""
+    <div style='text-align: center; font-size: 80px; font-weight: bold; color: #8E44AD; margin: 20px 0;'>
+        {h:02d}:{m:02d}:{s:02d}
+    </div>
+    """, unsafe_allow_html=True)
+    
+    c_btn1, c_btn2, c_btn3 = st.columns(3)
+    if c_btn1.button("▶️ INICIAR"):
+        state['ativo'] = True
+        state['inicio'] = time.time()
+        st.rerun()
+        
+    if c_btn2.button("⏸️ PAUSAR"):
+        if state['ativo']:
+            state['acumulado'] += time.time() - state['inicio']
+            state['ativo'] = False
+        st.rerun()
+        
+    if c_btn3.button("💾 SALVAR"):
+        minutos = tempo_total / 60
         if minutos > 1:
-            salvar_sessao(m_foco, minutos, 0, 0)
-            st.success("Salvo!"); st.balloons()
-        state['acumulado']=0; state['ativo']=False; st.rerun()
+            salvar_sessao(materia_foco, minutos, 0, 0)
+            state['acumulado'] = 0
+            state['ativo'] = False
+            st.balloons()
+            st.success("Salvo com sucesso!")
+            time.sleep(2)
+            st.rerun()
+        else:
+            st.error("Estude pelo menos 1 minuto!")
 
-# --- ABA 4: SIMULADOR ---
-with tab_sim:
-    st.markdown("### 📝 Treinamento Intensivo")
-    if 'questoes' not in st.session_state: st.session_state.questoes = []
-    
-    c_s1, c_s2 = st.columns(2)
-    s_mat = c_s1.selectbox("Matéria", config['materias'], key="sim_mat")
-    s_qtd = c_s2.slider("Qtd Questões", 3, 10, 5)
-    
-    if st.button("Gerar Questões Inéditas"):
-        with st.spinner("Criando caderno de questões..."):
-            st.session_state.questoes = gerar_simulado(config.get('banca'), config.get('cargo'), s_mat, s_qtd)
-    
-    if st.session_state.questoes:
-        form = st.form("simulado_form")
-        respostas = {}
-        for i, q in enumerate(st.session_state.questoes):
-            form.markdown(f"**{i+1}) {q['pergunta']}**")
-            respostas[i] = form.radio(f"Resp {i+1}", q['opcoes'], key=f"q_{i}")
-            form.markdown("---")
-        
-        if form.form_submit_button("Corrigir"):
-            acertos = 0
-            for i, q in enumerate(st.session_state.questoes):
-                letra_user = respostas[i].split(")")[0]
-                if letra_user == q['correta']:
-                    acertos += 1
-                    st.success(f"Q{i+1}: Correta! ✅")
-                else:
-                    st.error(f"Q{i+1}: Errou ❌ (Correta: {q['correta']})")
-                with st.expander("Ver Comentário"): st.write(q['comentario'])
+# --- ABA 3: SIMULADOR IA (Simplificado) ---
+with tab3:
+    st.markdown("### 🤖 Gerador de Questões")
+    if not IA_DISPONIVEL:
+        st.error("IA não conectada. Configure a API Key no .streamlit/secrets.toml")
+    else:
+        topic = st.selectbox("Tópico:", config['materias'], key="sim_topic")
+        if st.button("Gerar Questão Rápida"):
+            prompt = f"Crie 1 questão difícil de múltipla escolha (A,B,C,D,E) sobre {topic} banca {config['banca']}. Formato JSON: {{pergunta, opcoes, correta, comentario}}"
+            try:
+                with st.spinner("IA pensando..."):
+                    resp = modelo.generate_content(prompt)
+                    # Tratamento simples para garantir JSON
+                    txt = resp.text.replace("```json", "").replace("```", "")
+                    q = json.loads(txt)
+                    
+                    # Salva no estado para não sumir
+                    st.session_state.questao_atual = q
+            except:
+                st.error("Erro na IA. Tente de novo.")
+
+        # Exibir Questão
+        if 'questao_atual' in st.session_state:
+            q = st.session_state.questao_atual
+            st.info(q.get('pergunta', ''))
             
-            nota = (acertos/len(st.session_state.questoes))*100
-            st.metric("Resultado", f"{nota:.0f}%")
-            salvar_sessao(s_mat, 15, len(st.session_state.questoes), acertos)
+            escolha = st.radio("Sua resposta:", q.get('opcoes', []), key="radio_resp")
+            
+            if st.button("Conferir Resposta"):
+                letra = escolha.split(")")[0] if escolha else ""
+                if letra == q.get('correta'):
+                    st.success("✅ ACERTOU!")
+                    st.balloons()
+                    salvar_sessao(topic, 5, 1, 1) # Salva 5 min e 1 acerto
+                else:
+                    st.error(f"❌ Errou! Era a letra {q.get('correta')}")
+                
+                with st.expander("Ver explicação"):
+                    st.write(q.get('comentario'))
 
-# --- ABA 5: CONFIGURAÇÕES ---
-with tab_config:
-    st.header("⚙️ Configurações do Concurso")
+# --- ABA 4: CONFIGURAÇÕES ---
+with tab4:
+    st.markdown("### ⚙️ Ajustes")
     
-    # Upload Inteligente
-    arquivo = st.file_uploader("Upload do Edital (PDF)", type="pdf")
-    if arquivo and st.button("Ler Edital com IA"):
-        with st.spinner("Lendo..."):
-            dados = analisar_edital_completo(arquivo)
-            if dados:
-                salvar_config(dados['materias'], config['data_prova'], dados['banca'], dados['cargo'])
-                st.success(f"Configurado para {dados['banca']} - {dados['cargo']}!")
+    with st.form("config_form"):
+        novo_cargo = st.text_input("Cargo Alvo", config.get('cargo'))
+        nova_banca = st.text_input("Banca", config.get('banca'))
+        nova_data = st.date_input("Data da Prova")
+        
+        # Editor de Matérias (Simples texto separado por vírgula para mobile)
+        materias_str = st.text_area("Matérias (separe por vírgula)", ", ".join(config['materias']))
+        
+        if st.form_submit_button("Salvar Tudo"):
+            lista_mat = [x.strip() for x in materias_str.split(",")]
+            salvar_config(lista_mat, nova_data, nova_banca, novo_cargo)
+            st.success("Configurações atualizadas!")
+            time.sleep(1)
+            st.rerun()
+
+    # Botão de Reset (Cuidado)
+    if st.checkbox("Mostrar Área de Perigo"):
+        if st.button("🗑️ Apagar Todo Histórico"):
+            if os.path.exists(ARQUIVO_ESTUDOS):
+                os.remove(ARQUIVO_ESTUDOS)
                 st.rerun()
-    
-    st.divider()
-    
-    # Edição Manual
-    c_conf1, c_conf2, c_conf3 = st.columns(3)
-    banca_man = c_conf1.text_input("Banca", config.get('banca', ''))
-    cargo_man = c_conf2.text_input("Cargo", config.get('cargo', ''))
-    data_man = c_conf3.date_input("Data da Prova", datetime.strptime(config['data_prova'], "%Y-%m-%d"))
-    
-    df_mat = pd.DataFrame(config['materias'], columns=["Materia"])
-    edit_mat = st.data_editor(df_mat, num_rows="dynamic")
-    
-    if st.button("Salvar Manualmente"):
-        salvar_config(edit_mat["Materia"].tolist(), data_man, banca_man, cargo_man)
-        st.success("Salvo!")
