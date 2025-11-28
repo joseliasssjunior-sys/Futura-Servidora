@@ -2,6 +2,6 @@ streamlit
 pandas
 altair
 pypdf
-google-generativeai>=0.7.0
 watchdog
+google-generativeai>=0.8.3
 
