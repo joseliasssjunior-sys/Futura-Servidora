@@ -42,7 +42,8 @@ try:
     if "GEMINI_API_KEY" in st.secrets:
         api_key = st.secrets["GEMINI_API_KEY"]
         genai.configure(api_key=api_key)
-        modelo = genai.GenerativeModel('gemini-pro')
+        modelo = genai.GenerativeModel('gemini-1.5-flash')
+
 
         IA_DISPONIVEL = True
     else:
