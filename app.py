@@ -42,7 +42,8 @@ try:
     if "GEMINI_API_KEY" in st.secrets:
         api_key = st.secrets["GEMINI_API_KEY"]
         genai.configure(api_key=api_key)
-        modelo = genai.GenerativeModel('gemini-1.5-flash')
+        modelo = genai.GenerativeModel('gemini-pro')
+
         IA_DISPONIVEL = True
     else:
         ERRO_IA_DETALHE = "Chave GEMINI_API_KEY não encontrada nos Secrets."
