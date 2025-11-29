@@ -1,239 +1,307 @@
 import streamlit as st
 import pandas as pd
-import altair as alt
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 import time
 import os
 import json
-import google.generativeai as genai
-from pypdf import PdfReader
+import random
 
 # --- 1. CONFIGURAÇÃO VISUAL ---
-st.set_page_config(page_title="Futura Servidora", page_icon="⚖️", layout="wide")
+st.set_page_config(page_title="Painel TJ-MS", page_icon="⚖️", layout="wide")
 
+# Estilos CSS para Gamificação e Visual Limpo
 st.markdown("""
 <style>
+    /* Esconde menu padrão */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
-    .metric-card {
-        background-color: #ffffff;
+    
+    /* Card de XP */
+    .xp-card {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 20px;
+        border-radius: 15px;
+        color: white;
+        text-align: center;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+        margin-bottom: 20px;
+    }
+    .xp-valor { font-size: 40px; font-weight: bold; }
+    .xp-label { font-size: 14px; text-transform: uppercase; letter-spacing: 1px; }
+    
+    /* Card de Recompensa */
+    .reward-card {
         border: 1px solid #e0e0e0;
         border-radius: 10px;
         padding: 15px;
-        box-shadow: 2px 2px 10px rgba(0,0,0,0.05);
         text-align: center;
+        transition: transform 0.2s;
     }
-    h1 {
-        text-align: center; color: #8E44AD; 
-        font-family: 'Helvetica', sans-serif; font-size: 2.5rem !important; 
-    }
-    .stButton>button {
-        width: 100%; border-radius: 20px; height: 50px; font-weight: bold;
+    .reward-card:hover { transform: scale(1.02); border-color: #764ba2; }
+    
+    /* Barra de Progresso do Edital */
+    .stProgress > div > div > div > div {
+        background-color: #764ba2;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# --- 2. CÉREBRO DE I.A. (INSPIRADO NO CÓDIGO ADVOGADO) ---
-IA_DISPONIVEL = False
-ERRO_IA_DETALHE = ""
-modelo = None
+# --- 2. GERENCIAMENTO DE DADOS (JSON) ---
+ARQUIVO_DADOS = "dados_tjms.json"
 
-def limpar_json_resposta(texto):
-    """Limpa a resposta da IA para garantir um JSON válido (igual ao código do advogado)"""
-    texto = texto.replace('```json', '').replace('```', '').strip()
-    # Encontra onde começa { e termina }
-    start = texto.find('{')
-    end = texto.rfind('}') + 1
-    if start != -1 and end != -1:
-        texto = texto[start:end]
-    return texto
+# Template inicial do TJ-MS (Pode editar depois)
+TEMPLATE_TJMS = {
+    "config": {"nome": "Futura Servidora", "cargo": "Analista/Técnico TJ-MS"},
+    "wallet": {"xp": 0, "nivel": 1},
+    "recompensas": [
+        {"item": "🍫 Chocolate/Doce", "custo": 60, "icon": "🍫"},
+        {"item": "💆‍♀️ Massagem (15min)", "custo": 300, "icon": "💆‍♀️"},
+        {"item": "🍕 Pedir Pizza/Japa", "custo": 1200, "icon": "🍣"},
+        {"item": "🎬 Cinema/Série s/ Culpa", "custo": 400, "icon": "🍿"},
+        {"item": "💅 Vale Manicure", "custo": 800, "icon": "💅"}
+    ],
+    "edital": {
+        "Língua Portuguesa": ["Ortografia Oficial", "Acentuação", "Crase", "Sintaxe", "Interpretação de Texto", "Pontuação"],
+        "Direito Constitucional": ["Direitos e Garantias Fundamentais", "Organização do Estado", "Poder Judiciário", "Funções Essenciais à Justiça"],
+        "Direito Administrativo": ["Princípios", "Atos Administrativos", "Poderes", "Responsabilidade Civil", "Improbidade (Lei 8.429)"],
+        "Processo Civil": ["Prazos Processuais", "Atos Processuais", "Tutelas Provisórias", "Recursos"],
+        "Processo Penal": ["Inquérito Policial", "Ação Penal", "Provas", "Prisão e Liberdade Provisória"],
+        "Legislação Específica": ["Regimento Interno TJ-MS", "Estatuto dos Servidores MS"]
+    },
+    "progresso_edital": {}, # Guarda o que já foi ticado: {"Língua Portuguesa": ["Crase"]}
+    "revisoes": [] # Lista de revisões agendadas: {"assunto": "Crase", "data": "2023-10-20"}
+}
 
-def conectar_ia_robusta():
-    """Tenta conectar em vários modelos até achar um que funcione"""
-    global modelo, IA_DISPONIVEL, ERRO_IA_DETALHE
+def carregar_dados():
+    if not os.path.exists(ARQUIVO_DADOS):
+        salvar_dados(TEMPLATE_TJMS)
+        return TEMPLATE_TJMS
+    with open(ARQUIVO_DADOS, "r", encoding='utf-8') as f:
+        return json.load(f)
+
+def salvar_dados(dados):
+    with open(ARQUIVO_DADOS, "w", encoding='utf-8') as f:
+        json.dump(dados, f, ensure_ascii=False, indent=4)
+
+# --- 3. LÓGICA DE NEGÓCIO ---
+
+def adicionar_xp(dados, minutos):
+    # 1 minuto = 1 XP (Simples e justo)
+    xp_ganho = int(minutos)
+    dados['wallet']['xp'] += xp_ganho
     
-    if "GEMINI_API_KEY" not in st.secrets:
-        ERRO_IA_DETALHE = "Chave API não configurada nos Secrets."
-        return
-
-    try:
-        genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+    # Check de Nível (A cada 1000xp sobe nível)
+    novo_nivel = (dados['wallet']['xp'] // 1000) + 1
+    msg_nivel = ""
+    if novo_nivel > dados['wallet']['nivel']:
+        dados['wallet']['nivel'] = novo_nivel
+        msg_nivel = f"PARABÉNS! VOCÊ SUBIU PARA O NÍVEL {novo_nivel}! 🚀"
+        st.balloons()
         
-        # Lista de prioridade (do mais rápido para o mais compatível)
-        tentativas = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro']
-        
-        modelo_escolhido = None
-        
-        # Tenta inicializar cada um
-        for m_nome in tentativas:
-            try:
-                # Teste rápido para ver se o modelo responde
-                temp_model = genai.GenerativeModel(m_nome)
-                # Não fazemos chamada real aqui para economizar, apenas instanciamos
-                modelo_escolhido = m_nome
-                modelo = temp_model
-                break # Se não deu erro ao instanciar, usa esse!
-            except:
-                continue
-        
-        if modelo:
-            IA_DISPONIVEL = True
-        else:
-            # Fallback final genérico
-            modelo = genai.GenerativeModel('gemini-pro')
-            IA_DISPONIVEL = True
-            
-    except Exception as e:
-        ERRO_IA_DETALHE = str(e)
-        IA_DISPONIVEL = False
+    salvar_dados(dados)
+    return xp_ganho, msg_nivel
 
-# Inicializa a IA ao carregar o app
-conectar_ia_robusta()
+def agendar_revisao(dados, assunto):
+    # Regra simples: Revisar amanhã (24h) e daqui a 7 dias
+    hoje = date.today()
+    datas = [hoje + timedelta(days=1), hoje + timedelta(days=7), hoje + timedelta(days=30)]
+    
+    for d in datas:
+        dados['revisoes'].append({"assunto": assunto, "data": str(d), "feito": False})
+    salvar_dados(dados)
 
-# --- 3. DADOS E FUNÇÕES DE ARQUIVO ---
-ARQUIVO_ESTUDOS = "historico_estudos.csv"
-ARQUIVO_CONFIG = "config_concurso.json"
+def get_revisoes_hoje(dados):
+    hoje = str(date.today())
+    pendentes = [r for r in dados['revisoes'] if r['data'] <= hoje and not r['feito']]
+    return pendentes
 
-def carregar_config():
-    if os.path.exists(ARQUIVO_CONFIG):
-        with open(ARQUIVO_CONFIG, "r") as f: return json.load(f)
-    return {"materias": ["Português", "Direito Constitucional"], "data_prova": str(date.today()), "banca": "FGV", "cargo": "Analista"}
+# --- 4. INTERFACE DO APP ---
 
-def salvar_config(materias, data_prova, banca, cargo):
-    with open(ARQUIVO_CONFIG, "w") as f:
-        json.dump({"materias": materias, "data_prova": str(data_prova), "banca": banca, "cargo": cargo}, f)
+dados = carregar_dados()
 
-def carregar_estudos():
-    if not os.path.exists(ARQUIVO_ESTUDOS):
-        return pd.DataFrame(columns=["Data", "Materia", "Minutos", "Qtd_Questões", "Acertos"])
-    return pd.read_csv(ARQUIVO_ESTUDOS)
+# SIDEBAR (CARTEIRA E PERFIL)
+with st.sidebar:
+    st.markdown(f"## 👮‍♀️ {dados['config']['cargo']}")
+    
+    # Cartão de XP
+    st.markdown(f"""
+    <div class="xp-card">
+        <div class="xp-label">Nível {dados['wallet']['nivel']}</div>
+        <div class="xp-valor">💎 {dados['wallet']['xp']}</div>
+        <div class="xp-label">Estaloquecas</div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    st.write("---")
+    st.write("**Resumo do Edital:**")
+    
+    # Cálculo total do edital
+    total_topicos = sum(len(v) for v in dados['edital'].values())
+    total_feitos = sum(len(v) for v in dados['progresso_edital'].values())
+    progresso_total = total_feitos / total_topicos if total_topicos > 0 else 0
+    
+    st.progress(progresso_total)
+    st.caption(f"{total_feitos}/{total_topicos} tópicos concluídos ({int(progresso_total*100)}%)")
 
-def salvar_sessao(materia, minutos, questoes, acertos):
-    df = carregar_estudos()
-    novo = pd.DataFrame([{
-        "Data": datetime.now().strftime("%Y-%m-%d"),
-        "Materia": materia,
-        "Minutos": int(minutos),
-        "Qtd_Questões": int(questoes),
-        "Acertos": int(acertos)
-    }])
-    pd.concat([df, novo], ignore_index=True).to_csv(ARQUIVO_ESTUDOS, index=False)
+# ABAS PRINCIPAIS
+tab_foco, tab_edital, tab_loja, tab_config = st.tabs(["⏱️ Foco & Revisão", "📋 Edital Verticalizado", "🎁 Banco de Recompensas", "⚙️ Ajustes"])
 
-def analisar_edital_pdf(arquivo_pdf):
-    """Lê o PDF usando pypdf e envia texto para a IA"""
-    if not IA_DISPONIVEL: return None
-    try:
-        leitor = PdfReader(arquivo_pdf)
-        texto = ""
-        # Lê as primeiras 15 páginas (onde geralmente está o resumo)
-        for pag in leitor.pages[:15]: 
-            texto += pag.extract_text() or ""
-        
-        prompt = f"""
-        Analise este edital de concurso. Extraia APENAS JSON com:
-        "banca": nome da banca,
-        "cargo": cargo principal,
-        "materias": lista de strings com disciplinas.
-        Texto: {texto[:20000]}
-        """
-        resp = modelo.generate_content(prompt)
-        return json.loads(limpar_json_resposta(resp.text))
-    except: return None
+# --- ABA 1: FOCO E REVISÃO ---
+with tab_foco:
+    # 1. Alerta de Revisão (Prioridade Máxima)
+    revisoes = get_revisoes_hoje(dados)
+    if revisoes:
+        st.error(f"🚨 **ATENÇÃO:** Você tem {len(revisoes)} revisões acumuladas para hoje!")
+        with st.expander("Ver Revisões Pendentes", expanded=True):
+            for i, rev in enumerate(revisoes):
+                col_r1, col_r2 = st.columns([4, 1])
+                col_r1.write(f"📅 {rev['data']} - **{rev['assunto']}**")
+                if col_r2.button("✅ Feito", key=f"rev_{i}"):
+                    # Marca como feito na lista original
+                    idx_real = dados['revisoes'].index(rev)
+                    dados['revisoes'][idx_real]['feito'] = True
+                    # Ganha XP extra por revisar
+                    adicionar_xp(dados, 15) 
+                    st.success("+15 XP por revisar!")
+                    time.sleep(1)
+                    st.rerun()
+    else:
+        st.success("✨ Tudo em dia! Nenhuma revisão atrasada.")
 
-# --- 4. INTERFACE ---
-if 'cronometro' not in st.session_state: st.session_state.cronometro = {'ativo': False, 'inicio': None, 'acumulado': 0}
-config = carregar_config()
+    st.divider()
 
-st.markdown(f"<h1>⚖️ Painel da Aprovação</h1>", unsafe_allow_html=True)
-st.markdown(f"<h3 style='text-align: center; color: gray; margin-top: -20px;'>{config['cargo']} | {config['banca']}</h3>", unsafe_allow_html=True)
-
-# Lógica de Data
-try:
-    dias = (datetime.strptime(config['data_prova'], "%Y-%m-%d").date() - date.today()).days
-    msg_dias = f"📅 Faltam **{dias}** dias" if dias > 0 else ("🔥 É HOJE!" if dias == 0 else "🏁 Já passou")
-except: msg_dias = "⚙️ Configure a data"
-st.info(msg_dias, icon="⏳")
-
-tab1, tab2, tab3, tab4 = st.tabs(["📊 Painel", "⏱️ Foco", "📝 Simulado", "⚙️ Config"])
-
-with tab1:
-    df = carregar_estudos()
-    if not df.empty:
-        c1, c2 = st.columns(2)
-        c1.markdown(f"<div class='metric-card'><h3>{(df['Minutos'].sum()/60):.1f}h</h3><p>Horas</p></div>", unsafe_allow_html=True)
-        c2.markdown(f"<div class='metric-card'><h3>{df['Qtd_Questões'].sum()}</h3><p>Questões</p></div>", unsafe_allow_html=True)
-        st.altair_chart(alt.Chart(df).mark_bar().encode(x='Data', y='Qtd_Questões', color='Materia').properties(height=250), use_container_width=True)
-    else: st.warning("Sem dados ainda.")
-
-with tab2: # CRONÔMETRO
-    st.markdown("### 🍅 Modo Pomodoro")
-    foco = st.selectbox("Matéria:", config['materias'])
-    place = st.empty()
+    # 2. Cronômetro de Estudo
+    st.subheader("🍅 Hora de Estudar")
+    
+    if 'cronometro' not in st.session_state: 
+        st.session_state.cronometro = {'ativo': False, 'inicio': None, 'acumulado': 0}
     stt = st.session_state.cronometro
-    
-    b1, b2, b3 = st.columns(3)
-    if b1.button("▶️", use_container_width=True): stt['ativo']=True; stt['inicio']=time.time()-stt['acumulado']; st.rerun()
-    if b2.button("⏸️", use_container_width=True): stt['ativo']=False; stt['acumulado']=time.time()-stt['inicio']; st.rerun()
-    if b3.button("💾", use_container_width=True):
-        mins = (time.time()-stt['inicio'] if stt['ativo'] else stt['acumulado'])/60
-        if mins > 0.1: salvar_sessao(foco, mins, 0, 0); st.success("Salvo!"); time.sleep(1)
-        stt['ativo']=False; stt['acumulado']=0; st.rerun()
+
+    col_timer1, col_timer2 = st.columns([1, 1])
+    with col_timer1:
+        materia_atual = st.selectbox("O que vamos estudar?", list(dados['edital'].keys()))
+        topico_livre = st.text_input("Qual assunto específico? (Ex: Crase)", placeholder="Digite o tópico...")
+
+    with col_timer2:
+        # Display Relógio
+        tempo = time.time()-stt['inicio'] if stt['ativo'] else stt['acumulado']
+        m, s = divmod(int(tempo), 60); h, m = divmod(m, 60)
+        st.markdown(f"<div style='font-size: 60px; font-weight: bold; color: #4B0082; text-align: center;'>{h:02d}:{m:02d}:{s:02d}</div>", unsafe_allow_html=True)
         
-    tempo = time.time()-stt['inicio'] if stt['ativo'] else stt['acumulado']
-    m,s=divmod(int(tempo),60); h,m=divmod(m,60)
-    place.markdown(f"<div style='text-align:center; font-size:60px; color:#8E44AD;'>{h:02d}:{m:02d}:{s:02d}</div>", unsafe_allow_html=True)
+        b1, b2, b3 = st.columns(3)
+        if b1.button("▶️ INICIAR", use_container_width=True): stt['ativo']=True; stt['inicio']=time.time()-stt['acumulado']; st.rerun()
+        if b2.button("⏸️ PAUSAR", use_container_width=True): stt['ativo']=False; stt['acumulado']=time.time()-stt['inicio']; st.rerun()
+        if b3.button("💾 SALVAR", use_container_width=True):
+            mins = (time.time()-stt['inicio'] if stt['ativo'] else stt['acumulado'])/60
+            if mins > 1: 
+                xp, msg = adicionar_xp(dados, mins)
+                # Agenda revisão automaticamente se tiver tópico
+                if topico_livre: agendar_revisao(dados, f"{materia_atual} - {topico_livre}")
+                
+                st.balloons()
+                st.success(f"Show! +{xp} XP na carteira! {msg}")
+                if topico_livre: st.info(f"📅 Revisão agendada para {topico_livre}")
+                
+                stt['acumulado']=0; stt['ativo']=False; time.sleep(2); st.rerun()
+            else:
+                st.warning("Tempo muito curto!")
+
     if stt['ativo']: time.sleep(1); st.rerun()
 
-with tab3: # SIMULADO IA ROBUSTO
-    st.markdown("### 🤖 Gerador Inteligente")
-    if not IA_DISPONIVEL: st.error(f"Erro IA: {ERRO_IA_DETALHE}")
-    else:
-        topico = st.selectbox("Assunto:", config['materias'])
-        if st.button("Gerar Questão"):
-            p = f"Gere 1 questão difícil de múltipla escolha sobre {topico} ({config['banca']}). Responda JSON puro: {{pergunta, opcoes, correta, comentario}}"
-            try:
-                with st.spinner("IA analisando banca..."):
-                    res = modelo.generate_content(p)
-                    # AQUI ESTÁ A MÁGICA DO CÓDIGO ADVOGADO:
-                    json_limpo = limpar_json_resposta(res.text)
-                    st.session_state.quest = json.loads(json_limpo)
-            except Exception as e: st.error(f"Erro na geração: {e}")
+# --- ABA 2: EDITAL VERTICALIZADO ---
+with tab_edital:
+    st.header("📋 Controle de Edital")
+    st.caption("Marque o que você já dominou. Isso agenda revisões e mostra seu progresso.")
+    
+    for materia, topicos in dados['edital'].items():
+        # Cria um Accordion para cada matéria
+        feitos_na_materia = dados['progresso_edital'].get(materia, [])
+        progresso = len(feitos_na_materia) / len(topicos) if topicos else 0
+        
+        with st.expander(f"{materia}  --  {int(progresso*100)}% Concluído"):
+            # Barra de progresso visual
+            st.progress(progresso)
             
-        if 'quest' in st.session_state:
-            q = st.session_state.quest
-            st.write(f"**{q['pergunta']}**")
-            resp = st.radio("Opções:", q['opcoes'], label_visibility="collapsed")
-            if st.button("Corrigir"):
-                # Limpeza extra para garantir que pega só a letra (A, B, C...)
-                letra_resp = resp.split(")")[0].strip() if resp else ""
-                letra_corr = q['correta'].strip()
-                
-                if letra_resp == letra_corr: 
-                    st.success("✅ CERTO!"); st.balloons(); salvar_sessao(topico, 5, 1, 1)
-                else: 
-                    st.error(f"❌ Errado! Era {letra_corr}")
-                st.info(q['comentario'])
+            # Checkboxes
+            cols = st.columns(2) # Duas colunas para economizar espaço
+            for i, topico in enumerate(topicos):
+                is_checked = topico in feitos_na_materia
+                # Truque: Usar o label como chave única
+                col = cols[i % 2]
+                if col.checkbox(topico, value=is_checked, key=f"chk_{materia}_{i}"):
+                    if topico not in feitos_na_materia:
+                        if materia not in dados['progresso_edital']: dados['progresso_edital'][materia] = []
+                        dados['progresso_edital'][materia].append(topico)
+                        adicionar_xp(dados, 10) # Bônus por fechar tópico
+                        agendar_revisao(dados, f"{materia}: {topico}")
+                        salvar_dados(dados)
+                        st.rerun()
+                else:
+                    if topico in feitos_na_materia:
+                        dados['progresso_edital'][materia].remove(topico)
+                        salvar_dados(dados)
+                        st.rerun()
 
-with tab4:
-    with st.form("cfg"):
-        c = st.text_input("Cargo", config['cargo'])
-        b = st.text_input("Banca", config['banca'])
-        d = st.date_input("Data")
-        m = st.text_area("Matérias", ", ".join(config['materias']))
-        if st.form_submit_button("Salvar"):
-            salvar_config([x.strip() for x in m.split(",")], d, b, c)
+# --- ABA 3: BANCO DE RECOMPENSAS ---
+with tab_loja:
+    st.header("🎁 Loja de Recompensas")
+    st.markdown("Troque suas horas líquidas de estudo por mimos merecidos!")
+    
+    saldo = dados['wallet']['xp']
+    st.info(f"💎 Seu Saldo Atual: **{saldo}** Estaloquecas")
+    
+    # Grid de Recompensas
+    cols = st.columns(3)
+    for i, item in enumerate(dados['recompensas']):
+        with cols[i % 3]:
+            st.markdown(f"""
+            <div class="reward-card">
+                <div style="font-size:40px">{item['icon']}</div>
+                <h3>{item['item']}</h3>
+                <p style="color: #8E44AD; font-weight:bold">{item['custo']} XP</p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Botão de Compra
+            if st.button(f"Resgatar {item['item']}", key=f"buy_{i}", use_container_width=True):
+                if saldo >= item['custo']:
+                    dados['wallet']['xp'] -= item['custo']
+                    salvar_dados(dados)
+                    st.balloons()
+                    st.success(f"🎉 Resgatado! Aproveite seu(sua) {item['item']}!")
+                    time.sleep(2)
+                    st.rerun()
+                else:
+                    st.error(f"Faltam {item['custo'] - saldo} XP para isso!")
+
+# --- ABA 4: CONFIGURAÇÕES ---
+with tab_config:
+    st.header("⚙️ Ajustes do Sistema")
+    
+    with st.expander("📝 Editar Tópicos do Edital"):
+        st.caption("Adicione novos tópicos separados por vírgula.")
+        materia_edit = st.selectbox("Escolha a Matéria", list(dados['edital'].keys()))
+        novos_topicos = st.text_area("Tópicos Atuais", ", ".join(dados['edital'][materia_edit]))
+        
+        if st.button("Salvar Edital"):
+            lista = [t.strip() for t in novos_topicos.split(",") if t.strip()]
+            dados['edital'][materia_edit] = lista
+            salvar_dados(dados)
+            st.success("Edital atualizado!")
+            time.sleep(1)
             st.rerun()
             
-    st.divider()
-    st.markdown("### 📥 Importar Edital")
-    arq = st.file_uploader("Solte o PDF do Edital aqui", type="pdf")
-    if arq and st.button("Ler Edital com IA"):
-        with st.spinner("Lendo PDF e configurando tudo..."):
-            dados = analisar_edital_pdf(arq)
-            if dados:
-                salvar_config(dados['materias'], d, dados['banca'], dados['cargo'])
-                st.success(f"Sucesso! Configurado para {dados['banca']} - {dados['cargo']}")
-                time.sleep(2)
-                st.rerun()
-            else:
-                st.error("Não consegui ler o edital. Tente um PDF mais simples.")
+    with st.expander("➕ Adicionar Nova Recompensa"):
+        r_nome = st.text_input("Nome do Prêmio (Ex: Jantar no Japonês)")
+        r_custo = st.number_input("Custo em XP (1h estudo = 60 XP)", value=100)
+        r_icon = st.text_input("Emoji", "🎁")
+        
+        if st.button("Adicionar Prêmio"):
+            dados['recompensas'].append({"item": r_nome, "custo": r_custo, "icon": r_icon})
+            salvar_dados(dados)
+            st.success("Prêmio adicionado à loja!")
+            
+    if st.button("🗑️ Resetar Tudo (Zerar XP e Edital)"):
+        if os.path.exists(ARQUIVO_DADOS):
+            os.remove(ARQUIVO_DADOS)
+            st.rerun()
